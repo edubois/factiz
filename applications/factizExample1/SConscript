@@ -1,0 +1,19 @@
+Import( 'project' )
+Import( 'libs' )
+
+libraries = [
+              libs.factiz,
+              libs.boost_program_options,
+            ]
+
+name = project.getName()
+sourcesDir = '.'
+sources = project.scanFiles( [sourcesDir] )
+
+env = project.createEnv( libraries )
+env.Append( CPPPATH=sourcesDir )
+factizExample1 = env.Program( target=name, source=sources )
+
+install = env.Install( project.inOutputBin(), factizExample1 )
+env.Alias(name, install )
+env.Alias('all', install )

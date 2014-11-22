@@ -1,0 +1,13 @@
+Import( 'project' )
+Import( 'libs' )
+
+project.StaticLibrary( 'factiz',
+                       sources   = project.scanFiles( ['src'] ),
+                       includes  = ['src'],
+                       libraries = [
+                                     libs.boost,
+                                     libs.boost_math,
+                                    ],
+                       shared = False
+                      )
+
