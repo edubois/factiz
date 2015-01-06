@@ -8,9 +8,7 @@ sys.path.append('tools')
 from sconsProject import SConsProject
 
 class FactizMatchProject( SConsProject ):
-    def getOutputMayaPlugin( self ) :
-        name = self.getName()
-        return os.path.join( self.dir_output_bin, name, self.getOfxPlatformName(), name + '.so' )
+    pass
 
 #______________________________________________________________________________#
 
