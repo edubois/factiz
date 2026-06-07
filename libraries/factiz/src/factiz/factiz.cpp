@@ -1,7 +1,6 @@
 #include "factiz.hpp"
 #include <boost/multiprecision/cpp_int.hpp>
 #include <random>
-
 namespace factiz
 {
 
@@ -26,138 +25,88 @@ inline int_type gcd_int(int_type a, int_type b)
     return a;
 }
 
-inline int_type mod(int_type a, const int_type& n)
+// ============================
+// MULTI-STREAM RHO CORE
+// ============================
+
+struct RhoStream
 {
-    return a % n;
+    int_type x;
+    int_type y;
+    int_type c;
+};
+
+// optional: your walker influences seeds
+inline int_type walker_mix(int_type seed, const int_type& n)
+{
+    return (seed * seed + 7 * seed + 3) % n;
 }
 
-inline int_type mulmod(int_type a, int_type b, const int_type& n)
+bool rho_stream_run(const int_type& n, RhoStream& s, int_type& factor)
 {
-    return (a * b) % n;
-}
-
-/* =========================
-   POLLARD RHO (Brent-style simplified)
-   ========================= */
-bool rho_stage(const int_type& n, int_type& factor)
-{
-    auto f = [&](int_type x, int_type c)
+    auto f = [&](const int_type& x)
     {
-        return (x * x + c) % n;
+        return (x * x + s.c) % n;
     };
 
-    std::mt19937_64 rng(1234);
+    int_type x = s.x;
+    int_type y = s.y;
 
-    for (int attempt = 0; attempt < 20; ++attempt)
+    for (int iter = 0; iter < 5000000; ++iter)
     {
-        int_type x = rng() % (n - 2) + 2;
-        int_type y = x;
-        int_type c = rng() % (n - 1);
-        if (c == 0) c = 1;
+        x = f(x);
+        y = f(f(y));
 
-        int_type d = 1;
-
-        while (d == 1)
-        {
-            x = f(x, c);
-            y = f(f(y, c), c);
-
-            d = gcd_int(abs_int(x - y), n);
-
-            if (d == n)
-                break;
-        }
+        int_type d = gcd_int(abs_int(x - y), n);
 
         if (d > 1 && d < n)
         {
             factor = d;
+            s.x = x;
+            s.y = y;
             return true;
         }
+
+        if (d == n)
+            return false;
     }
 
+    s.x = x;
+    s.y = y;
     return false;
 }
 
-/* =========================
-   ECM (very simplified Montgomery-like toy ECM core)
-   ========================= */
+// ============================
+// MULTI-STREAM DRIVER
+// ============================
 
-struct Point
+bool rho_multi_stream(const int_type& n, int_type& factor)
 {
-    int_type x;
-    int_type y;
-};
-
-/*
- * This is NOT full ECM implementation (that is huge),
- * but a minimal "ECM-like failure detector core".
- */
-bool ecm_stage(const int_type& n, int_type& factor)
-{
-    std::mt19937_64 rng(5678);
-
-    for (int attempt = 0; attempt < 30; ++attempt)
+    if (n % 2 == 0)
     {
-        int_type x = rng() % n;
-        int_type y = rng() % n;
-
-        int_type a = rng() % n;
-
-        // curve: y^2 = x^3 + ax + 1 mod n
-        auto add = [&](Point P, Point Q) -> Point
-        {
-            Point R;
-
-            int_type dx = (Q.x - P.x);
-            int_type dy = (Q.y - P.y);
-
-            int_type inv = gcd_int(dx, n);
-
-            if (inv != 1 && inv != n)
-            {
-                factor = inv;
-                return {0, 0};
-            }
-
-            R.x = (dy * dy - P.x - Q.x) % n;
-            R.y = (dy * (P.x - R.x) - P.y) % n;
-
-            return R;
-        };
-
-        Point P = {x, y};
-
-        for (int i = 0; i < 200; ++i)
-        {
-            P = add(P, P);
-        }
-    }
-
-    return false;
-}
-
-/* =========================
-   HYBRID GATEWAY
-   ========================= */
-
-bool hybrid_factor(const int_type& n, int_type& p, int_type& q)
-{
-    int_type f;
-
-    // Stage 1: fast wins
-    if (rho_stage(n, f))
-    {
-        p = f;
-        q = n / f;
+        factor = 2;
         return true;
     }
 
-    // Stage 2: ECM fallback
-    if (ecm_stage(n, f))
+    const int STREAMS = 16;
+
+    // deterministic base seeds (no RNG instability)
+    int_type base = n % 100000;
+
+    for (int i = 0; i < STREAMS; ++i)
     {
-        p = f;
-        q = n / f;
-        return true;
+        RhoStream s;
+
+        int_type seed = walker_mix(base + i * 1337, n);
+
+        s.x = (seed % (n - 2)) + 2;
+        s.y = walker_mix(seed + 1, n);
+
+        s.c = walker_mix(seed + 3, n);
+        if (s.c == 0) s.c = 1;
+
+        if (rho_stream_run(n, s, factor))
+            return true;
     }
 
     return false;
@@ -167,8 +116,16 @@ bool hybrid_factor(const int_type& n, int_type& p, int_type& q)
 
 bool factorize(const int_type& n, int_type& p, int_type& q)
 {
-    return hybrid_factor(n, p, q);
+    int_type f;
+
+    if (rho_multi_stream(n, f))
+    {
+        p = f;
+        q = n / f;
+        return true;
+    }
+
+    return false;
 }
 
 } // namespace factiz
-
