@@ -19,6 +19,6 @@ make -j9
 ## Running
 ```
 ./factizExample1 100000980001501
-P*Q = 10000019 * 10000079
-Time taken: 22 ms
+P*Q = 10000079 * 10000019
+Time taken: 0 ms
 ```
