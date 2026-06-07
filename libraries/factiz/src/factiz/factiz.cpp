@@ -1,6 +1,5 @@
 #include "factiz.hpp"
 #include <boost/multiprecision/cpp_int.hpp>
-#include <random>
 
 namespace factiz
 {
@@ -10,6 +9,9 @@ using int_type = boost::multiprecision::cpp_int;
 namespace
 {
 
+// =========================
+// UTIL
+// =========================
 inline int_type abs_int(const int_type& x)
 {
     return x < 0 ? -x : x;
@@ -27,48 +29,29 @@ inline int_type gcd_int(int_type a, int_type b)
 }
 
 // =========================
-// BANDIT POLICY (VERY SIMPLE)
+// LSH STATE ENCODING
 // =========================
-
-struct Policy
+inline int lsh_bucket(const int_type& x,
+                      const int_type& y)
 {
-    int_type score = 1;
-};
+    int_type d = abs_int(x - y);
 
-static const int MODES = 5;
+    // log-scale bucketing
+    int bx = 0;
+    int_type tmp = x;
 
-// reward table (adaptive weights)
-struct Bandit
-{
-    Policy p[MODES];
+    while (tmp > 1) { tmp >>= 1; bx++; }
 
-    int pick(int_type seed)
-    {
-        // weighted deterministic selection
-        int best = 0;
-        int_type best_score = -1;
+    int bd = 0;
+    tmp = d;
 
-        for (int i = 0; i < MODES; i++)
-        {
-            int_type s = p[i].score * (seed % (i + 1 + 1));
-            if (s > best_score)
-            {
-                best_score = s;
-                best = i;
-            }
-        }
+    while (tmp > 1) { tmp >>= 1; bd++; }
 
-        return best;
-    }
-
-    void reward(int mode, int_type r)
-    {
-        p[mode].score += r + 1;
-    }
-};
+    return bx * 32 + bd;
+}
 
 // =========================
-// WALKER MIX
+// WALKER
 // =========================
 inline int_type walker_mix(int_type x, const int_type& n)
 {
@@ -76,7 +59,7 @@ inline int_type walker_mix(int_type x, const int_type& n)
 }
 
 // =========================
-// RHO MODE FUNCTION
+// RHO MODES
 // =========================
 inline int_type rho_f(int_type x, int_type c, int mode, const int_type& n)
 {
@@ -92,26 +75,68 @@ inline int_type rho_f(int_type x, int_type c, int mode, const int_type& n)
 }
 
 // =========================
-// SINGLE STREAM WITH POLICY
+// LSH BANDIT TABLE
+// =========================
+static const int MODES = 5;
+static const int BUCKETS = 256;
+
+struct BanditTable
+{
+    int_type score[BUCKETS][MODES];
+
+    BanditTable()
+    {
+        for (int i = 0; i < BUCKETS; i++)
+            for (int j = 0; j < MODES; j++)
+                score[i][j] = 1;
+    }
+
+    int pick(int bucket)
+    {
+        int best = 0;
+        int_type best_score = -1;
+
+        for (int m = 0; m < MODES; m++)
+        {
+            if (score[bucket][m] > best_score)
+            {
+                best_score = score[bucket][m];
+                best = m;
+            }
+        }
+
+        return best;
+    }
+
+    void reward(int bucket, int mode, int_type r)
+    {
+        score[bucket][mode] += (r > 0 ? 1 : -1);
+    }
+};
+
+// =========================
+// STREAM
 // =========================
 bool rho_stream(
     const int_type& n,
     int_type x0,
     int_type c,
-    int mode,
     int_type& factor,
-    Bandit& bandit)
+    BanditTable& bandit)
 {
-    auto f = [&](int_type x)
-    {
-        return rho_f(x, c, mode, n);
-    };
-
     int_type x = x0;
     int_type y = x0;
 
     for (int i = 0; i < 50000; i++)
     {
+        int bucket = lsh_bucket(x, y);
+        int mode = bandit.pick(bucket % BUCKETS);
+
+        auto f = [&](int_type v)
+        {
+            return rho_f(v, c, mode, n);
+        };
+
         x = f(x);
         y = f(f(y));
 
@@ -119,47 +144,45 @@ bool rho_stream(
 
         if (d > 1 && d < n)
         {
+            bandit.reward(bucket % BUCKETS, mode, 50);
             factor = d;
-
-            // REWARD: strong signal
-            bandit.reward(mode, 1000 / (i + 1));
-
             return true;
         }
 
         if (d == n)
         {
-            // penalty (bad cycle collapse)
-            bandit.reward(mode, -10);
+            bandit.reward(bucket % BUCKETS, mode, -5);
             return false;
+        }
+
+        // forward-forward style shaping:
+        if (i % 32 == 0)
+        {
+            bandit.reward(bucket % BUCKETS, mode, 1);
         }
     }
 
-    // weak penalty
-    bandit.reward(mode, -1);
     return false;
 }
 
 // =========================
-// MULTI-STREAM LEARNED RHO
+// DRIVER
 // =========================
-bool rho_learned(const int_type& n, int_type& factor)
+bool rho_lsh_ff(const int_type& n, int_type& factor)
 {
-    Bandit bandit;
+    BanditTable bandit;
 
     int_type base = n % 100000;
 
-    for (int attempt = 0; attempt < 30; ++attempt)
+    for (int attempt = 0; attempt < 200; attempt++)
     {
-        int mode = bandit.pick(base + attempt);
-
         int_type seed = walker_mix(base + attempt * 1337, n);
 
         int_type x0 = (seed % (n - 2)) + 2;
         int_type c  = walker_mix(seed + 17, n);
         if (c == 0) c = 1;
 
-        if (rho_stream(n, x0, c, mode, factor, bandit))
+        if (rho_stream(n, x0, c, factor, bandit))
             return true;
     }
 
@@ -172,7 +195,7 @@ bool factorize(const int_type& n, int_type& p, int_type& q)
 {
     int_type f;
 
-    if (rho_learned(n, f))
+    if (rho_lsh_ff(n, f))
     {
         p = f;
         q = n / f;
