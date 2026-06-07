@@ -1,6 +1,6 @@
 # Product of large prime factorizer
 
-This is something I invented when I was a student in 2008. At that time, there was a bug I accidentally introduced and which I did not find, thanks to Mistral AI I was able to make it working again.
+This is something I invented when I was a student in 2008 (factorize_v1 only, v2 was added in 2026). At that time, there was a bug I accidentally introduced and which I did not find, thanks to Mistral AI I was able to make it working again.
 
 Disclaimer: I have no idea how relevant this is, this is not my field of study, but at the time I invented this, I really enjoyed the expedition.
 
