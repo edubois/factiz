@@ -1,239 +1,93 @@
+/***************************************
+ * Eloi's WALKER algorithm v1
+ *
+ ***************************************/
+
 #include "factiz.hpp"
+#include <iostream>
+#include <future>
 #include <boost/multiprecision/cpp_int.hpp>
+#include <boost/multiprecision/integer.hpp>
 
-namespace factiz
+namespace boost { namespace multiprecision {
+inline cpp_int abs(const cpp_int &x) { return x * x.sign(); }
+}}
+
+namespace factiz { namespace {
+using namespace boost::multiprecision;
+
+// OPT5: abs natif plus efficace
+inline int_type fast_abs(const int_type &x) { return (x < 0) ? -x : x; }
+
+void lc(int_type &l, const int_type &x1, const int_type &x2)
+{ int_type s=x2-x1,d=s/4; l=d+x1; l*=l; }
+
+void rc(int_type &r, const int_type &x1, const int_type &x2)
+{ int_type s=x2-x1,d=s/2,sm=d+x1,t=sm*sm; t*=2;
+  int_type t2=0; lc(t2,x1,x2); r=t-t2; }
+
+void factorization_impl(const int_type &k, int_type &l, int_type &h)
 {
-
-using int_type = boost::multiprecision::cpp_int;
-
-namespace
-{
-
-// =========================
-// UTIL
-// =========================
-inline int_type abs_int(const int_type& x)
-{
-    return x < 0 ? -x : x;
-}
-
-inline int_type gcd_int(int_type a, int_type b)
-{
-    while (b != 0)
-    {
-        int_type t = a % b;
-        a = b;
-        b = t;
+    // OPT6: démarrer depuis sqrt(k) — fenêtre initiale bien plus petite
+    l = sqrt(k);
+    h = l + 1;
+    while (h >= l) {
+        int_type s=h-l, d=s/2, t1=0; lc(t1,l,h); t1=fast_abs(k-t1);
+        int_type t2=0; rc(t2,l,h); t2=fast_abs(k-t2);
+        if (t2>t1) { h=h-d; if(l>h){++h;} } else { ++l; }
     }
-    return a;
 }
 
-// Integer log2 approximation (number of bits - 1)
-inline int ilog2(const int_type& x)
+// OPT1: mise à jour incrémentale des produits (2 mult/iter au lieu de 4)
+void follow_impl(const int_type &k, int_type &x, int_type &y,
+                 const int dx, const int dy,
+                 const int_type &w, const int_type &h)
 {
-    if (x <= 1) return 0;
-    int bits = 0;
-    int_type tmp = x;
-    while (tmp > 1)
-    {
-        tmp >>= 1;
-        bits++;
-    }
-    return bits;
-}
-
-// =========================
-// LEARNED HASH FUNCTION (Forward-Forward inspired)
-// =========================
-// Weights are placeholders for values that could be learned via Forward-Forward.
-// These are hardcoded here but could be replaced with trained weights.
-// Features: log2(x), log2(y), log2(|x-y|), n % 1000, (n/1000) % 1000, and differences.
-static constexpr int W_LOGX = 3;
-static constexpr int W_LOGY = 5;
-static constexpr int W_LOGD = 7;
-static constexpr int W_MOD1 = 11;
-static constexpr int W_MOD2 = 13;
-static constexpr int W_DIFF_XY = 17;
-static constexpr int W_DIFF_XD = 19;
-static constexpr int W_DIFF_YD = 23;
-
-inline int learned_hash(const int_type& x, const int_type& y, const int_type& n)
-{
-    int_type d = abs_int(x - y);
-
-    // Feature 1: Bit lengths (log2 approximations)
-    int bx = ilog2(x);
-    int by = ilog2(y);
-    int bd = ilog2(d);
-
-    // Feature 2: Modulo features
-    int mod1 = (n % 1000).convert_to<int>();
-    int mod2 = ((n / 1000) % 1000).convert_to<int>();
-
-    // Feature 3: Differences in bit lengths
-    int diff_xy = bx - by;
-    int diff_xd = bx - bd;
-    int diff_yd = by - bd;
-
-    // Weighted combination (simulates a learned linear layer)
-    int hash_val = W_LOGX * bx + W_LOGY * by + W_LOGD * bd +
-                   W_MOD1 * mod1 + W_MOD2 * mod2 +
-                   W_DIFF_XY * diff_xy + W_DIFF_XD * diff_xd + W_DIFF_YD * diff_yd;
-
-    // Map to bucket range [0, BUCKETS-1]
-    const int BUCKETS = 256;
-    return (hash_val % BUCKETS + BUCKETS) % BUCKETS; // Ensure non-negative
-}
-
-// =========================
-// WALKER
-// =========================
-inline int_type walker_mix(int_type x, const int_type& n)
-{
-    return (x * x + 7 * x + 11) % n;
-}
-
-// =========================
-// RHO MODES
-// =========================
-inline int_type rho_f(int_type x, int_type c, int mode, const int_type& n)
-{
-    switch (mode)
-    {
-        case 0: return (x * x + c) % n;
-        case 1: return (x * x + x + c) % n;
-        case 2: return (x * x + 3 * x + c) % n;
-        case 3: return (x * x + walker_mix(x, n) + c) % n;
-        case 4: return (x * x + (x ^ c) + c) % n;
-    }
-    return (x * x + c) % n;
-}
-
-// =========================
-// BANDIT TABLE
-// =========================
-static const int MODES = 5;
-static const int BUCKETS = 256;
-
-struct BanditTable
-{
-    int_type score[BUCKETS][MODES];
-
-    BanditTable()
-    {
-        for (int i = 0; i < BUCKETS; i++)
-            for (int j = 0; j < MODES; j++)
-                score[i][j] = 1;
-    }
-
-    int pick(int bucket)
-    {
-        int best = 0;
-        int_type best_score = -1;
-        for (int m = 0; m < MODES; m++)
-        {
-            if (score[bucket][m] > best_score)
-            {
-                best_score = score[bucket][m];
-                best = m;
-            }
+    int_type xi=x+dx, yi=y+dy;
+    int_type xy=x*y, xiy=xi*y, xyi=x*yi, xiyi=xi*yi;
+    do {
+        int_type ll=fast_abs(xy-k), hl=fast_abs(xyi-k),
+                 lh=fast_abs(xiy-k), hh=fast_abs(xiyi-k);
+        if (ll==0) break;
+        else if (hl>hh && lh>hh) {
+            // pas diagonal
+            x+=dx; y+=dy; xi=x+dx; yi=y+dy;
+            xy=xiyi; xiy=xi*y; xyi=x*yi; xiyi=xi*yi; // 3 mult
         }
-        return best;
-    }
-
-    void reward(int bucket, int mode, int_type r)
-    {
-        score[bucket][mode] += (r > 0 ? 1 : -1);
-    }
-};
-
-// =========================
-// STREAM
-// =========================
-bool rho_stream(
-    const int_type& n,
-    int_type x0,
-    int_type c,
-    int_type& factor,
-    BanditTable& bandit)
-{
-    int_type x = x0;
-    int_type y = x0;
-
-    for (int i = 0; i < 50000; i++)
-    {
-        int bucket = learned_hash(x, y, n);
-        int mode = bandit.pick(bucket % BUCKETS);
-
-        auto f = [&](int_type v)
-        {
-            return rho_f(v, c, mode, n);
-        };
-
-        x = f(x);
-        y = f(f(y));
-
-        int_type d = gcd_int(abs_int(x - y), n);
-
-        if (d > 1 && d < n)
-        {
-            bandit.reward(bucket % BUCKETS, mode, 50);
-            factor = d;
-            return true;
+        else if (hl>lh) {
+            // pas en x
+            x+=dx; xi=x+dx;
+            xy=xiy; xyi=xiyi; xiy=xi*y; xiyi=xi*yi;  // 2 mult
         }
-
-        if (d == n)
-        {
-            bandit.reward(bucket % BUCKETS, mode, -5);
-            return false;
+        else {
+            // pas en y
+            y+=dy; yi=y+dy;
+            xy=xyi; xiy=xiyi; xyi=x*yi; xiyi=xi*yi;  // 2 mult
         }
-
-        // Forward-Forward style shaping
-        if (i % 32 == 0)
-        {
-            bandit.reward(bucket % BUCKETS, mode, 1);
-        }
-    }
-    return false;
+    } while (w>xi && xi>1 && h>yi && yi>1);
 }
-
-// =========================
-// DRIVER
-// =========================
-bool rho_lsh_ff(const int_type& n, int_type& factor)
-{
-    BanditTable bandit;
-    int_type base = n % 100000;
-
-    for (int attempt = 0; attempt < 200; attempt++)
-    {
-        int_type seed = walker_mix(base + attempt * 1337, n);
-        int_type x0 = (seed % (n - 2)) + 2;
-        int_type c  = walker_mix(seed + 17, n);
-        if (c == 0) c = 1;
-
-        if (rho_stream(n, x0, c, factor, bandit))
-            return true;
-    }
-    return false;
-}
-
 } // namespace
 
-// =========================
-// PUBLIC INTERFACE
-// =========================
-bool factorize(const int_type& n, int_type& p, int_type& q)
+bool factorize_v1(const int_type &pq, int_type &p, int_type &q)
 {
-    int_type f;
-    if (rho_lsh_ff(n, f))
-    {
-        p = f;
-        q = n / f;
-        return true;
-    }
+    int_type hl, hh; p=0; q=0;
+    factorization_impl(pq, hl, hh);
+
+    // OPT3: les deux directions en parallèle
+    auto fut = std::async(std::launch::async, [pq, hl, hh]() {
+        int_type x=hl, y=hh;
+        follow_impl(pq, x, y, 1, -1, pq, pq);
+        return std::make_pair(x, y);
+    });
+
+    int_type x2=hl, y2=hh;
+    follow_impl(pq, x2, y2, -1, 1, pq, pq);
+    auto [x1,y1] = fut.get();
+
+    // OPT4: affichage uniquement en fin, hors boucle chaude
+    if (x1*y1==pq) { p=x1; q=y1; return true; }
+    if (x2*y2==pq) { p=x2; q=y2; return true; }
     return false;
 }
-
 } // namespace factiz
 

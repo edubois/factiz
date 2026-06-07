@@ -23,7 +23,16 @@ typedef boost::multiprecision::cpp_int int_type;
  * @param q output q
  * @return true if success
  */
-bool factorize( const int_type & pq, int_type & p, int_type & q );
+bool factorize_v1( const int_type & pq, int_type & p, int_type & q );
+
+/**
+ * @brief factorize the product of two bigs prime numbers using rho + walker + learnt LSH function
+ * @param pq p*q input number
+ * @param p output p
+ * @param q output q
+ * @return true if success
+ */
+bool factorize_v2( const int_type & pq, int_type & p, int_type & q );
     
 }
 
