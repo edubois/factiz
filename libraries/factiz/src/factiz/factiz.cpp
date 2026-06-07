@@ -14,74 +14,25 @@ inline int_type abs_int(const int_type& x)
     return x < 0 ? -x : x;
 }
 
-inline int_type isqrt(const int_type& n)
+inline int_type gcd_int(int_type a, int_type b)
 {
-    return sqrt(n);
-}
-
-/*
- * Fermat-style initialization:
- * start near sqrt(k)
- */
-void init_point(const int_type& k, int_type& x, int_type& y)
-{
-    x = isqrt(k);
-    y = x;
-}
-
-/*
- * Newton-like hyperbola descent.
- *
- * We solve:
- *      xy = k
- *
- * using error:
- *      E = k - xy
- *
- * and derivative:
- *      d(xy) = y dx + x dy
- */
-bool follow(const int_type& k, int_type& x, int_type& y)
-{
-    const int_type limit = 1;
-
-    for (int iter = 0; iter < 200000000; ++iter)
+    while (b != 0)
     {
-        int_type prod = x * y;
-
-        if (prod == k)
-            return true;
-
-        int_type E = k - prod;
-
-        /*
-         * If error is positive:
-         * product too small → increase variables
-         */
-        if (E > 0)
-        {
-            // best axis move estimate
-            int_type dy = E / x;
-
-            if (dy == 0)
-                dy = 1;
-
-            y += dy;
-        }
-        else
-        {
-            // product too large → decrease x
-            int_type dx = (-E) / y;
-
-            if (dx == 0)
-                dx = 1;
-
-            x -= dx;
-        }
-
-        if (x <= limit || y <= limit)
-            return false;
+        int_type t = a % b;
+        a = b;
+        b = t;
     }
+    return a;
+}
+
+bool step_search(const int_type& k, int_type& x, int_type& y)
+{
+    if (x <= 1) return false;
+
+    y = k / x;   // 🔥 invariant projection (critical fix)
+
+    if (x * y == k)
+        return true;
 
     return false;
 }
@@ -90,31 +41,33 @@ bool follow(const int_type& k, int_type& x, int_type& y)
 
 bool factorize(const int_type& k, int_type& p, int_type& q)
 {
-    p = 0;
-    q = 0;
+    // start near sqrt(k)
+    int_type x = sqrt(k);
+    if (x * x < k) ++x;
 
-    int_type x, y;
-    init_point(k, x, y);
+    const int_type limit = 1;
 
-    /*
-     * Fermat symmetry:
-     * try both directions implicitly via swap
-     */
-    if (follow(k, x, y))
+    for (int i = 0; i < 200000000; ++i)
     {
-        p = x;
-        q = y;
-        return true;
-    }
+        int_type y;
 
-    // fallback: reversed roles
-    init_point(k, x, y);
+        if (step_search(k, x, y))
+        {
+            p = x;
+            q = y;
+            return true;
+        }
 
-    if (follow(k, x, y))
-    {
-        p = x;
-        q = y;
-        return true;
+        // guided search (safe direction only)
+        int_type prod = x * (k / x);
+
+        if (prod < k)
+            --x;
+        else
+            ++x;
+
+        if (x <= limit)
+            return false;
     }
 
     return false;
