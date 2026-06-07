@@ -6,7 +6,7 @@ Disclaimer: I have no idea how relevant this is, this is not my field of study, 
 
 ## Compilation
 * Requirement: boost somewhere
-* Advise: download boost as zip and compile by end, alternative is to run: sudo apt install libboost-multiprecision-dev
+* Advise: download boost as zip and compile by hand, alternative is to run: sudo apt install libboost-multiprecision-dev
 
 
 ```
