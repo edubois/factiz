@@ -1,6 +1,7 @@
 #include "factiz.hpp"
 #include <boost/multiprecision/cpp_int.hpp>
 #include <random>
+
 namespace factiz
 {
 
@@ -25,34 +26,91 @@ inline int_type gcd_int(int_type a, int_type b)
     return a;
 }
 
-// ============================
-// MULTI-STREAM RHO CORE
-// ============================
+// =========================
+// BANDIT POLICY (VERY SIMPLE)
+// =========================
 
-struct RhoStream
+struct Policy
 {
-    int_type x;
-    int_type y;
-    int_type c;
+    int_type score = 1;
 };
 
-// optional: your walker influences seeds
-inline int_type walker_mix(int_type seed, const int_type& n)
+static const int MODES = 5;
+
+// reward table (adaptive weights)
+struct Bandit
 {
-    return (seed * seed + 7 * seed + 3) % n;
+    Policy p[MODES];
+
+    int pick(int_type seed)
+    {
+        // weighted deterministic selection
+        int best = 0;
+        int_type best_score = -1;
+
+        for (int i = 0; i < MODES; i++)
+        {
+            int_type s = p[i].score * (seed % (i + 1 + 1));
+            if (s > best_score)
+            {
+                best_score = s;
+                best = i;
+            }
+        }
+
+        return best;
+    }
+
+    void reward(int mode, int_type r)
+    {
+        p[mode].score += r + 1;
+    }
+};
+
+// =========================
+// WALKER MIX
+// =========================
+inline int_type walker_mix(int_type x, const int_type& n)
+{
+    return (x * x + 7 * x + 11) % n;
 }
 
-bool rho_stream_run(const int_type& n, RhoStream& s, int_type& factor)
+// =========================
+// RHO MODE FUNCTION
+// =========================
+inline int_type rho_f(int_type x, int_type c, int mode, const int_type& n)
 {
-    auto f = [&](const int_type& x)
+    switch (mode)
     {
-        return (x * x + s.c) % n;
+        case 0: return (x * x + c) % n;
+        case 1: return (x * x + x + c) % n;
+        case 2: return (x * x + 3 * x + c) % n;
+        case 3: return (x * x + walker_mix(x, n) + c) % n;
+        case 4: return (x * x + (x ^ c) + c) % n;
+    }
+    return (x * x + c) % n;
+}
+
+// =========================
+// SINGLE STREAM WITH POLICY
+// =========================
+bool rho_stream(
+    const int_type& n,
+    int_type x0,
+    int_type c,
+    int mode,
+    int_type& factor,
+    Bandit& bandit)
+{
+    auto f = [&](int_type x)
+    {
+        return rho_f(x, c, mode, n);
     };
 
-    int_type x = s.x;
-    int_type y = s.y;
+    int_type x = x0;
+    int_type y = x0;
 
-    for (int iter = 0; iter < 5000000; ++iter)
+    for (int i = 0; i < 50000; i++)
     {
         x = f(x);
         y = f(f(y));
@@ -62,50 +120,46 @@ bool rho_stream_run(const int_type& n, RhoStream& s, int_type& factor)
         if (d > 1 && d < n)
         {
             factor = d;
-            s.x = x;
-            s.y = y;
+
+            // REWARD: strong signal
+            bandit.reward(mode, 1000 / (i + 1));
+
             return true;
         }
 
         if (d == n)
+        {
+            // penalty (bad cycle collapse)
+            bandit.reward(mode, -10);
             return false;
+        }
     }
 
-    s.x = x;
-    s.y = y;
+    // weak penalty
+    bandit.reward(mode, -1);
     return false;
 }
 
-// ============================
-// MULTI-STREAM DRIVER
-// ============================
-
-bool rho_multi_stream(const int_type& n, int_type& factor)
+// =========================
+// MULTI-STREAM LEARNED RHO
+// =========================
+bool rho_learned(const int_type& n, int_type& factor)
 {
-    if (n % 2 == 0)
-    {
-        factor = 2;
-        return true;
-    }
+    Bandit bandit;
 
-    const int STREAMS = 16;
-
-    // deterministic base seeds (no RNG instability)
     int_type base = n % 100000;
 
-    for (int i = 0; i < STREAMS; ++i)
+    for (int attempt = 0; attempt < 30; ++attempt)
     {
-        RhoStream s;
+        int mode = bandit.pick(base + attempt);
 
-        int_type seed = walker_mix(base + i * 1337, n);
+        int_type seed = walker_mix(base + attempt * 1337, n);
 
-        s.x = (seed % (n - 2)) + 2;
-        s.y = walker_mix(seed + 1, n);
+        int_type x0 = (seed % (n - 2)) + 2;
+        int_type c  = walker_mix(seed + 17, n);
+        if (c == 0) c = 1;
 
-        s.c = walker_mix(seed + 3, n);
-        if (s.c == 0) s.c = 1;
-
-        if (rho_stream_run(n, s, factor))
+        if (rho_stream(n, x0, c, mode, factor, bandit))
             return true;
     }
 
@@ -118,7 +172,7 @@ bool factorize(const int_type& n, int_type& p, int_type& q)
 {
     int_type f;
 
-    if (rho_multi_stream(n, f))
+    if (rho_learned(n, f))
     {
         p = f;
         q = n / f;
