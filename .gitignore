@@ -1,4 +1,5 @@
 nbproject
 .dist
 dist
+build
 *.log

@@ -1,180 +1,184 @@
 #include "factiz.hpp"
 #include <iostream>
+#include <boost/multiprecision/cpp_int.hpp>
+#include <vector>
+#include <algorithm>
+
+namespace boost
+{
+namespace multiprecision
+{
+inline cpp_int abs(const cpp_int &x) { return x * x.sign(); }
+inline const cpp_int& max(const cpp_int &a, const cpp_int &b) { return (a > b) ? a : b; }
+inline const cpp_int& min(const cpp_int &a, const cpp_int &b) { return (a < b) ? a : b; }
+} // namespace multiprecision
+} // namespace boost
 
 namespace factiz
 {
-
 namespace
 {
+using namespace boost::multiprecision;
 
-// Left classifier
-void lc( int_type & l, const int_type & x1, const int_type & x2 )
+// Integer square root using Newton's method
+int_type isqrt(const int_type &n)
 {
-    /* Apply l = (((x2-x1)*0.25) + x1 )^2 */
-
-    /* Substract low bound from high bound */
-    int_type sub1 = x2 - x1;
-    /* Divide by 4 */
-    int_type div1 = sub1 / 4;
-    /* Add low bound */
-    l = div1 + x1;
-    /* Powerize to 2 */
-    l *= l;
-}
-
-// Right classifier
-void rc( int_type & r, const int_type & x1, const int_type & x2 )
-{
-    /* Apply: ((0.75 * (x2-x1)) + x1)^2 +
-              ((2*(0.5  * (x2-x1)) + x1)^2) - lc(x1, x2) -
-              ((0.75 * (x2-x1)) + x1)^2 */
-    /* Substract low bound from high bound */
-    int_type sub1 = x2 - x1;
-    /* Divide by 2 */
-    int_type div1 = sub1 / 2;
-    /* Add low bound */
-    int_type sum1 = div1 + x1;
-    /* Powerize to 2 */
-    int_type tmp1 = sum1 * sum1;
-    /* Multiply by 2 */
-    tmp1 *= 2;
-    /* Left classifier */
-    int_type tmp2 = 0;
-    lc( tmp2, x1, x2 );
-    /* Add low bound */
-    r = tmp1 - tmp2;
-}
-
-void factorization_impl( const int_type & k, int_type & l, int_type & h )
-{
-    l = 0;
-    h = k;
-    // Continue until granularity is not unity
-    while ( h >= l )
+    if (n == 0) return 0;
+    int_type x = n;
+    int_type y = (x + 1) / 2;
+    while (y < x)
     {
-        /* h - l */
-        int_type sub1 = h - l;
-        /* Divide by 2 */
-        int_type div1 = sub1 / 2;
-        /* euclidian left part */
-        int_type tmp1 = 0;
-        lc( tmp1, l, h );
-        tmp1 = abs( k - tmp1 );
-        int_type tmp2 = 0;
-        rc( tmp2, l, h );
-        tmp2 = abs( k - tmp2 );
-        if ( tmp2 > tmp1 )
+        x = y;
+        y = (x + n / x) / 2;
+    }
+    return x;
+}
+
+// Miller-Rabin primality test
+bool is_prime(const int_type &n)
+{
+    if (n <= 1) return false;
+    if (n <= 3) return true;
+    if (n % 2 == 0 || n % 3 == 0) return false;
+
+    int_type d = n - 1;
+    int s = 0;
+    while (d % 2 == 0) { d /= 2; s++; }
+
+    const std::vector<int_type> bases = {2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37};
+    for (const int_type &base : bases)
+    {
+        if (base >= n) continue;
+        int_type a = base;
+        int_type x = 1;
+        int_type power = d;
+        while (power > 0)
         {
-            h = h - div1;
-            if ( l > h )
+            if (power % 2 == 1) x = (x * a) % n;
+            a = (a * a) % n;
+            power /= 2;
+        }
+        if (x == 1 || x == n - 1) continue;
+
+        bool composite = true;
+        for (int r = 1; r < s; r++)
+        {
+            x = (x * x) % n;
+            if (x == n - 1) { composite = false; break; }
+        }
+        if (composite) return false;
+    }
+    return true;
+}
+
+// Find initial bounds with precise integer square root
+void find_initial_bounds(const int_type &k, int_type &l, int_type &h)
+{
+    int_type sqrt_k = isqrt(k);
+    // Dynamic buffer: 1% of sqrt(k) or at least 1000
+    int_type buffer = boost::multiprecision::max(int_type(1000), sqrt_k / 100);
+    l = boost::multiprecision::max(int_type(2), sqrt_k - buffer);
+    h = boost::multiprecision::min(k - 1, sqrt_k + buffer);
+}
+
+// Hyperbola traversal with small steps
+bool follow_hyperbola(const int_type &k, int_type &x, int_type &y)
+{
+    const int_type max_iterations = 1000000;
+    int_type iteration = 0;
+
+    while (iteration++ < max_iterations)
+    {
+        int_type product = x * y;
+        if (product == k)
+        {
+            if (x > 1 && y > 1 && x < k && y < k) return true;
+            // Skip trivial solutions
+            if (x == 1) x++;
+            else if (y == 1) y++;
+            else if (x == k) x--;
+            else if (y == k) y--;
+            continue;
+        }
+
+        // Use small, fixed steps
+        int_type step = (k > 1000000000) ? 10 : 1;
+
+        if (product < k)
+        {
+            if (x < y) x += step;
+            else y += step;
+        }
+        else
+        {
+            if (x > y && x > 2) x -= step;
+            else if (y > 2) y -= step;
+            else break;
+        }
+    }
+    return false;
+}
+
+} // namespace
+
+bool factorize(const int_type &pq, int_type &p, int_type &q)
+{
+    p = 0;
+    q = 0;
+
+    if (pq <= 3) return false;
+    if (is_prime(pq)) return false;
+
+    // 1. Try trial division for small factors
+    for (int_type x = 2; x <= 1000000; x++)
+    {
+        if (pq % x == 0)
+        {
+            int_type candidate = pq / x;
+            if (candidate > 1 && candidate < pq)
             {
-                ++h;
+                p = x;
+                q = candidate;
+                return true;
             }
         }
-        else
-        {
-            ++l;
-        }
-    }
-}
-
-void follow_impl(const int_type & k,
-                 int_type & x, int_type & y,
-                 const int dx, const int dy,
-                 const int_type & w, const int_type & h)
-{
-    int_type c, lh, hh, hl, ll, xi, yi, xy, xiy, xyi, xiyi, iix, iiy;
-    /* Initial warmup */
-    lc( c, x, y );
-    iix = dx;
-    iiy = dy;
-    xi  = x  + iix;
-    yi  = y  + iiy;
-    xy  = x  * y;
-    xiy = xi * y;
-    xyi =  x * yi;
-    xiyi = xi * yi;
-
-    do
-    {
-        /* compute ll */
-        ll = abs( xy - k );
-        /* compute hl */
-        hl = abs( xyi - c );
-        /* compute lh */
-        lh = abs( xiy - c );
-        /* compute hh */
-        hh = abs( xiyi - c );
-
-        /* Check if found */
-        if ( ll == 0 )
-        {
-            break;
-        }
-        else if ( hl > hh && lh > hh )
-        {
-            x += iix;
-            y += iiy;
-        }
-        else if ( hl > lh )
-        {
-            x += iix;
-        }
-        else
-        {
-            y += iiy;
-        }
-        xi = x + iix;
-        yi = y + iiy;
-        xy = x * y;
-        xiy = xi * y;
-        xyi = x * yi;
-        xiyi = xi * yi;
-    } while( w > xi && xi > 1 && h > yi && yi > 1 );
-}
-
-}
-
-/**
- * @brief factorize the product of two bigs prime numbers
- * @param pq p*q input number
- * @param p output p
- * @param q output q
- * @return true if success
- */
-bool factorize( const int_type & pq, int_type & p, int_type & q )
-{
-    int_type hl, hh; // Hyperbol bounds (low bound and high bound)
-    
-    p = 0; q = 0;
-    factorization_impl( pq, hl, hh);
-    
-    std::cerr << "Analysis hyperbol direction: up-right" << std::endl;
-    int_type x, y;
-    x = hl; y = hh;
-    follow_impl( pq, x, y, 1, -1, pq, pq );
-    int_type pq_candidate = x * y;
-    std::cout << "x: " << x << std::endl;
-    std::cout << "y: " << y << std::endl;
-    // Success ?
-    if ( pq_candidate != pq )
-    {
-        std::cerr << "Analysis hyperbol direction: down-left" << std::endl;
-        x = hl; y = hh;
-        follow_impl( pq, x, y, -1, 1, pq, pq );
-        pq_candidate = x * y;
-        std::cout << "x: " << x << std::endl;
-        std::cout << "y: " << y << std::endl;
     }
 
-    // Success (should be) ?
-    if ( pq_candidate == pq )
+    // 2. Try near sqrt(pq)
+    int_type l, h;
+    find_initial_bounds(pq, l, h);
+    for (int_type x = l; x <= h; x++)
+    {
+        if (x <= 1 || x >= pq) continue;
+        if (pq % x == 0)
+        {
+            p = x;
+            q = pq / x;
+            return true;
+        }
+    }
+
+    // 3. Try hyperbola traversal from (2, pq/2)
+    int_type x = 2;
+    int_type y = pq / 2;
+    if (follow_hyperbola(pq, x, y))
     {
         p = x;
         q = y;
         return true;
     }
+
+    // 4. Try from (sqrt(pq), sqrt(pq))
+    x = isqrt(pq);
+    y = x;
+    if (follow_hyperbola(pq, x, y))
+    {
+        p = x;
+        q = y;
+        return true;
+    }
+
     return false;
 }
 
-}
+} // namespace factiz

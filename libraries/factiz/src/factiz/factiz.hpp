@@ -8,9 +8,6 @@ namespace boost
 namespace multiprecision
 {
 
-inline cpp_int abs( const cpp_int & x )
-{ return x * x.sign(); }
-
 }
 }
 
